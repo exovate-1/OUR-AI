@@ -9,8 +9,9 @@ from tinygrad import Tensor, nn
 from tinygrad.nn import optim 
 from tinygrad.helpers import getenv 
 
-# Set device to CPU by default, or GPU if available and set
-DEVICE = getenv("GPU") 
+# Set device: Uses the 'GPU' environment variable if set, otherwise defaults to 'cpu'.
+# This avoids the "AttributeError: 'int' object has no attribute 'split'"
+DEVICE = getenv("GPU", 'cpu') 
 print(f"Using device: {DEVICE}")
 
 # --- CONFIGURATION (Hyperparameters) ---
@@ -38,9 +39,12 @@ def get_qa_pairs_and_vocab(url, max_entries):
     global char_to_int, int_to_char, VOCAB_SIZE
     print(f"-> Streaming JSON data from URL...")
     
-    response = requests.get(url, stream=True)
-    response.raise_for_status() 
-    data = response.json()
+    try:
+        response = requests.get(url, stream=True)
+        response.raise_for_status() 
+        data = response.json()
+    except Exception as e:
+        print(f"Error fetching/decoding data: {e}"); return None
         
     qa_list = []
     full_text = ""
@@ -95,12 +99,9 @@ def get_batch(data_tuples, batch_size, block_size):
         q, a = data_tuples[i]
         full_tokens = tokenize_qa(q, a, block_size + 1)
         
-        # X: Input (tokens 0 to BLOCK_SIZE-1)
-        # Y: Target (tokens 1 to BLOCK_SIZE) - shifted by one
         X_batch.append(full_tokens[:-1])
         Y_batch.append(full_tokens[1:])
         
-    # Tensors are created using numpy arrays
     X = Tensor(np.stack(X_batch), device=DEVICE)
     Y = Tensor(np.stack(Y_batch), device=DEVICE)
     return X, Y
@@ -120,7 +121,8 @@ class Head:
         
         # Causal mask creation 
         tril = np.triu(np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.float32) * -float('inf'), k=1)
-        self.tril = Tensor(tril, requires_grad=False, device=DEVICE)
+        # Tensor is initialized using the correct device string
+        self.tril = Tensor(tril, requires_grad=False, device=DEVICE) 
 
     def __call__(self, x):
         B, T, C = x.shape
@@ -130,7 +132,7 @@ class Head:
         # Compute attention scores: wei = Q @ K^T / sqrt(d_k)
         wei = q.scaled_dot_product_attention(k, transpose=True)
         
-        # Causal Masking: prevents looking ahead
+        # Causal Masking
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
         
         wei = wei.softmax(axis=-1)
@@ -228,11 +230,11 @@ class SimpleGPT:
 
 # Initialize the Model and Optimizer
 model = SimpleGPT()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE) # Optimizer is now imported correctly
+optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE) 
 
 print(f"\n--- Starting TinyGrad Q&A Fine-Tuning (Device: {DEVICE}) ---")
 
-# TinyGrad requires using Tensor.train() context for training mode (enables dropout, etc.)
+# TinyGrad requires using Tensor.train() context for training mode
 with Tensor.train():
     for iter_num in range(MAX_ITERS):
         # Sample a batch of data
@@ -241,12 +243,11 @@ with Tensor.train():
         # Forward pass
         logits, loss = model(xb, yb)
         
-        # Backward pass and optimization (TinyGrad Autograd in action!)
+        # Backward pass and optimization (Autograd)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
-        # Realize the loss to ensure computation is done and value is fetched
         if iter_num % (MAX_ITERS // 10) == 0 or iter_num == MAX_ITERS - 1:
             print(f"Step {iter_num}/{MAX_ITERS}: Train Loss = {loss.numpy().item():.4f}")
 
@@ -264,7 +265,6 @@ def simple_web_search(query):
         response.raise_for_status() 
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        # This class name is a heuristic for Google featured snippets
         snippet_element = soup.find('div', class_='BNeawe s3v9rd AP7Wnd')
         
         if snippet_element:
@@ -278,52 +278,34 @@ def simple_web_search(query):
         print(f"[ERROR] Web search failed: {e}")
         return "No external context could be retrieved from the web."
 
-# Set no_grad for inference to disable gradient computation and save memory/time
 @Tensor.no_grad
 def generate(model, prompt_str, max_new_tokens):
     """Generates text from a prompt (Q|A...)."""
     
-    # 1. Prepare initial input tokens
     input_str = prompt_str + "|" 
     idx = [char_to_int.get(c, char_to_int['<PAD>']) for c in input_str]
-    
-    # Pad or truncate input sequence to BLOCK_SIZE
     idx = (idx + [char_to_int['<PAD>']] * BLOCK_SIZE)[:BLOCK_SIZE]
-    
-    # Convert to Tensor (1, T)
     idx = Tensor(np.array(idx, dtype=np.int32), device=DEVICE).unsqueeze(0) 
 
-    # 2. Autoregressive Loop
     for _ in range(max_new_tokens):
-        # The input is always the last BLOCK_SIZE tokens
         idx_cond = idx
-        
-        # Get predictions (logits)
         logits, _ = model(idx_cond)
         
-        # Focus on the last time step (the predicted next token)
-        logits = logits[:, -1, :] # (1, VOCAB_SIZE)
-        
-        # Apply softmax to get probabilities
+        logits = logits[:, -1, :] 
         probs = logits.softmax(axis=-1)
         
-        # Sample from the distribution 
         probs_np = probs.numpy().flatten()
-        
-        # Use np.random.choice for token sampling
         idx_next_np = np.random.choice(VOCAB_SIZE, p=probs_np)
         
-        # Update Sequence: Shift the sequence left and append the new token
+        # Update Sequence: Shift and append
         idx_np = idx.numpy()
         new_idx_np = np.roll(idx_np[0], -1)
         new_idx_np[-1] = idx_next_np
         idx = Tensor(new_idx_np, device=DEVICE).unsqueeze(0)
         
-        # Stop condition: End-of-Sequence token
         if idx_next_np == char_to_int['\n']:
             break
 
-    # 3. Decode and Clean
     output_tokens = idx.numpy()[0].tolist()
     text = "".join([int_to_char.get(i, '') for i in output_tokens])
     
