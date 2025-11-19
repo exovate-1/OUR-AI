@@ -36,7 +36,8 @@ class NeuralNetwork:
             'python', 'programming', 'machine', 'learning', 'ai', 'artificial',
             'intelligence', 'neural', 'network', 'code', 'computer', 'science',
             'i', 'am', 'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at',
-            'to', 'for', 'with', 'about', 'like', 'as', 'if', 'then', 'else'
+            'to', 'for', 'with', 'about', 'like', 'as', 'if', 'then', 'else',
+            'knowledge', 'basic', 'learn', 'teaching', 'answer', 'question'
         ]
         for word in basic_words:
             self.vocab[word]
@@ -67,7 +68,7 @@ class NeuralNetwork:
         for idx in top_indices:
             if idx in self.reverse_vocab and vector[idx] > 0.1:
                 words.append(self.reverse_vocab[idx])
-        return " ".join(words) if words else "learning"
+        return " ".join(words) if words else "still learning"
     
     def forward(self, x):
         """Forward pass through the network"""
@@ -182,78 +183,154 @@ class TrueLLM:
         self.nn = NeuralNetwork(vocab_size)
         self.conversation_history = []
         self.training_epochs = 0
+        
+        # HARDCODED API KEY - Your OpenRouter key
         self.api_key = "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"
+        print("🔑 OpenRouter API Key: LOADED")
         
         # Initialize with some basic knowledge
         self._initialize_basic_knowledge()
     
-    def fetch_knowledge_from_api(self, topic, context=""):
-        """Use OpenRouter API to get knowledge for training"""
+    def fetch_knowledge_from_api(self, topic):
+        """Use OpenRouter API to get knowledge for training - FIXED VERSION"""
         if not self.api_key:
+            print("❌ No API key found")
             return None
             
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/exovate-1/OUR-AI",  # Required by OpenRouter
+                "X-Title": "OUR-AI Learning System"  # Required by OpenRouter
             }
             
-            prompt = f"""
-            Please provide a concise explanation about '{topic}' {context}.
-            Keep it simple and under 50 words. Focus on key concepts.
-            """
+            # Better prompt for learning
+            prompt = f"Explain '{topic}' in simple terms for a beginner. Keep it under 40 words and focus on key concepts."
             
             data = {
-                "model": "openai/gpt-3.5-turbo",
+                "model": "google/gemma-7b-it:free",  # Using a free model
                 "messages": [
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                "max_tokens": 100
+                "max_tokens": 80,
+                "temperature": 0.7
             }
             
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            print(f"🌐 Calling OpenRouter API for: {topic}")
+            response = requests.post(url, headers=headers, json=data, timeout=45)
+            
+            print(f"📡 API Response Status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
-                content = result['choices'][0]['message']['content']
-                return content.strip()
+                if 'choices' in result and len(result['choices']) > 0:
+                    content = result['choices'][0]['message']['content']
+                    print(f"✅ API Success: Received {len(content)} characters")
+                    return content.strip()
+                else:
+                    print(f"❌ API Error: No choices in response")
+                    print(f"Response: {result}")
+                    return None
             else:
-                print(f"❌ API Error: {response.status_code}")
-                return None
+                print(f"❌ API Error {response.status_code}: {response.text}")
+                # Try with a different model if first fails
+                return self._fallback_api_call(topic)
                 
         except Exception as e:
             print(f"❌ API Request Failed: {e}")
             return None
     
+    def _fallback_api_call(self, topic):
+        """Fallback API call with different settings"""
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/exovate-1/OUR-AI",
+                "X-Title": "OUR-AI Learning System"
+            }
+            
+            prompt = f"What is {topic}? Explain briefly."
+            
+            data = {
+                "model": "meta-llama/llama-3.1-8b-instruct:free",  # Alternative free model
+                "messages": [
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                "max_tokens": 60,
+                "temperature": 0.5
+            }
+            
+            print("🔄 Trying fallback API call...")
+            response = requests.post(url, headers=headers, json=data, timeout=45)
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                print(f"✅ Fallback API Success!")
+                return content.strip()
+            else:
+                print(f"❌ Fallback also failed: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Fallback API also failed: {e}")
+            return None
+    
     def learn_from_api(self, topic):
         """Learn about a topic using API and train neural network"""
-        print(f"🌐 Learning about '{topic}' from API...")
+        print(f"🌐 Learning about '{topic}' from OpenRouter API...")
         
         knowledge = self.fetch_knowledge_from_api(topic)
         if knowledge:
+            # Clean the knowledge
+            knowledge = self._clean_api_response(knowledge)
+            
             # Create Q-A pair and train
             question = f"what is {topic}"
             answer = knowledge
             
+            print(f"📚 Training neural network with API knowledge...")
             loss = self.teach(question, answer, epochs=5)
-            print(f"✅ Learned from API about '{topic}' (loss: {loss:.4f})")
+            print(f"✅ Successfully learned about '{topic}' (loss: {loss:.4f})")
+            print(f"💡 Knowledge: {knowledge}")
             return True
         else:
             print(f"❌ Failed to learn about '{topic}' from API")
+            print("💡 Try a different topic or check your API key")
             return False
+    
+    def _clean_api_response(self, text):
+        """Clean and format API response"""
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        # Remove quotes if present
+        text = text.strip('"\'')
+        # Limit length
+        if len(text) > 200:
+            text = text[:200] + "..."
+        return text
     
     def _initialize_basic_knowledge(self):
         """Initialize with some basic Q-A pairs"""
         basic_qa = [
             ("hello", "hello how can i help you"),
             ("hi", "hello how are you"),
-            ("what is your name", "i am an ai assistant"),
-            ("how are you", "i am functioning well thank you"),
-            ("what can you do", "i can learn from our conversations and help you")
+            ("what is your name", "i am an ai neural network"),
+            ("how are you", "i am learning and improving"),
+            ("what can you do", "i can learn from conversations and api knowledge"),
+            ("who created you", "i was created by exovate using neural networks"),
+            ("what is ai", "ai is artificial intelligence machine learning"),
+            ("teach me something", "i can learn from api and update my parameters")
         ]
         
         print("📚 Learning basic knowledge...")
@@ -308,22 +385,23 @@ class TrueLLM:
     def interactive_learn(self):
         """Interactive learning session"""
         print("\n" + "="*60)
-        print("🧠 TRUE NEURAL NETWORK TRAINING MODE")
-        print("🌐 OpenRouter API: ENABLED")
-        print("I learn by updating neural parameters through backpropagation!")
+        print("🧠 TRUE NEURAL NETWORK LLM WITH API LEARNING")
+        print("🔑 OpenRouter API: INTEGRATED AND READY")
+        print("💾 Knowledge stored in neural parameters through backpropagation")
         print("="*60)
         
         while True:
             print("\nChoose mode:")
             print("1. Teach me (Q -> A)")
             print("2. Ask me something") 
-            print("3. Learn from API")
+            print("3. Learn from API (Recommended)")
             print("4. Show my brain stats")
             print("5. Save my brain")
             print("6. Load my brain")
-            print("7. Exit")
+            print("7. Test API connection")
+            print("8. Exit")
             
-            choice = input("\nYour choice (1-7): ").strip()
+            choice = input("\nYour choice (1-8): ").strip()
             
             if choice == '1':
                 self._teaching_mode()
@@ -338,15 +416,29 @@ class TrueLLM:
             elif choice == '6':
                 self._load_model()
             elif choice == '7':
-                print("👋 Goodbye! Knowledge stored in neural parameters!")
+                self._test_api()
+            elif choice == '8':
+                print("👋 Goodbye! All knowledge stored in neural parameters!")
                 break
             else:
                 print("❌ Invalid choice")
     
+    def _test_api(self):
+        """Test API connection"""
+        print("\n🔍 Testing OpenRouter API connection...")
+        test_topic = "artificial intelligence"
+        knowledge = self.fetch_knowledge_from_api(test_topic)
+        if knowledge:
+            print(f"✅ API Connection SUCCESSFUL!")
+            print(f"📖 Sample knowledge: {knowledge}")
+        else:
+            print("❌ API Connection FAILED")
+            print("💡 Check your API key or try a different topic")
+    
     def _teaching_mode(self):
         """Teaching mode"""
         print("\n🎓 TEACHING MODE")
-        print("I will learn by updating my weights through backpropagation!")
+        print("I will learn by updating my neural weights through backpropagation!")
         
         question = input("Enter the question: ").strip()
         answer = input("Enter the correct answer: ").strip()
@@ -359,6 +451,7 @@ class TrueLLM:
                 epochs = 5
                 
             self.teach(question, answer, epochs)
+            print("✅ Knowledge stored in neural parameters!")
         else:
             print("❌ Please provide both question and answer")
     
@@ -371,14 +464,14 @@ class TrueLLM:
             print(f"🧠 My response: {response}")
             
             # Ask if they want to correct or learn more
-            correct = input("Want to: 1) Correct me 2) Learn more from API 3) Skip: ").strip()
+            correct = input("Options: 1) Correct me 2) Learn from API 3) Skip: ").strip()
             if correct == '1':
                 correct_answer = input("What should I have said? ").strip()
                 if correct_answer:
                     self.teach(question, correct_answer)
-                    print("✅ Thanks! I've updated my neural parameters!")
+                    print("✅ Thanks! Neural parameters updated!")
             elif correct == '2':
-                topic = input("What topic should I learn more about? ").strip()
+                topic = input("What related topic should I learn? ").strip()
                 if topic:
                     self.learn_from_api(topic)
         else:
@@ -388,10 +481,15 @@ class TrueLLM:
         """API-based learning mode"""
         print("\n🌐 API LEARNING MODE")
         print("I will fetch knowledge from OpenRouter and train my neural network!")
+        print("Available free models: gemma-7b, llama-3.1-8b")
         
         topic = input("Enter topic to learn: ").strip()
         if topic:
-            self.learn_from_api(topic)
+            success = self.learn_from_api(topic)
+            if success:
+                print("🎉 Success! My neural parameters have been updated with new knowledge!")
+            else:
+                print("😞 Failed to learn from API. Try manual teaching or different topic.")
         else:
             print("❌ Please enter a topic")
     
@@ -406,9 +504,9 @@ class TrueLLM:
         
         # Show some learned patterns
         if self.nn.training_pairs:
-            print(f"\n📚 Recently learned patterns:")
+            print(f"\n📚 Recently learned:")
             for q, a in self.nn.training_pairs[-5:]:
-                print(f"   '{q}'")
+                print(f"   Q: {q}")
     
     def _save_model(self):
         """Save the model parameters"""
@@ -429,58 +527,48 @@ class TrueLLM:
                     'timestamp': time.time()
                 })
 
-def demonstrate_training():
-    """Demonstrate the neural network learning"""
-    print("🧪 DEMONSTRATING NEURAL NETWORK LEARNING")
-    print("="*50)
-    
-    # Create a fresh LLM
+# Simple demonstration
+def quick_demo():
+    """Quick demonstration"""
+    print("🚀 Quick Demo: Neural Network Learning")
     llm = TrueLLM()
     
-    # Teach some concepts
-    teaching_examples = [
-        ("what is python", "python is a programming language"),
-        ("what is machine learning", "machine learning is a type of artificial intelligence"),
-    ]
+    # Test basic functionality
+    print("\n1. Testing basic knowledge...")
+    response = llm.ask("what is your name")
+    print(f"Response: {response}")
     
-    for question, answer in teaching_examples:
-        llm.teach(question, answer, epochs=3)
-        print()
+    print("\n2. Testing API learning...")
+    llm.learn_from_api("machine learning")
     
-    # Test knowledge
-    test_questions = [
-        "what is python",
-        "tell me about machine learning",
-    ]
-    
-    print("🧠 TESTING LEARNED KNOWLEDGE")
-    print("="*50)
-    for question in test_questions:
-        response = llm.ask(question)
-        print(f"Q: {question}")
-        print(f"A: {response}")
-        print()
-    
-    # Show final stats
-    llm._show_stats()
+    print("\n3. Testing learned knowledge...")
+    response = llm.ask("what is machine learning")
+    print(f"Response: {response}")
 
 if __name__ == "__main__":
-    print("🧠 TRUE NEURAL NETWORK LLM WITH API LEARNING")
-    print("🌐 OpenRouter API: INTEGRATED")
-    print("Knowledge is stored in neural weights through backpropagation!")
+    print("🧠 TRUE NEURAL NETWORK LLM WITH OPENROUTER API")
+    print("🔑 API Key: HARDCODED AND READY")
+    print("💾 Knowledge stored in W1, W2, b1, b2 parameters")
     
     try:
-        mode = input("\nChoose mode:\n1. Demo training\n2. Interactive learning (Recommended)\nChoice (1-2): ").strip()
+        mode = input("\nChoose mode:\n1. Quick Demo\n2. Interactive Learning (Recommended)\n3. Test API Only\nChoice (1-3): ").strip()
         
         if mode == '1':
-            demonstrate_training()
+            quick_demo()
+        elif mode == '2':
+            llm = TrueLLM()
+            llm.interactive_learn()
+        elif mode == '3':
+            llm = TrueLLM()
+            llm._test_api()
         else:
             llm = TrueLLM()
             llm.interactive_learn()
+            
     except KeyboardInterrupt:
-        print("\n\n👋 Program interrupted by user. Goodbye!")
+        print("\n\n👋 Program interrupted. Goodbye!")
     except Exception as e:
         print(f"\n❌ Error: {e}")
-        print("Trying to continue in safe mode...")
+        print("🔄 Starting in safe mode...")
         llm = TrueLLM()
         llm.interactive_learn()
