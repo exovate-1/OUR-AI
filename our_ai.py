@@ -6,10 +6,13 @@ from bs4 import BeautifulSoup
 # --- CORRECTED TINYGRAD IMPORTS ---
 from tinygrad import Tensor, nn
 from tinygrad.nn import optim 
-# *** FIX: Added get_parameters to retrieve weights for the optimizer ***
-from tinygrad.helpers import getenv, get_parameters 
+# *** FIX 1: get_parameters moved to tinygrad.nn.state in newer versions ***
+from tinygrad.nn.state import get_parameters 
+# *** FIX 2: getenv remains in tinygrad.helpers ***
+from tinygrad.helpers import getenv 
 
 # Set device: Uses the 'GPU' environment variable if set, otherwise defaults to 'cpu'.
+# This avoids the "AttributeError: 'int' object has no attribute 'split'"
 DEVICE = getenv("GPU", 'cpu') 
 print(f"Using device: {DEVICE}")
 
@@ -210,7 +213,7 @@ class SimpleGPT:
 
 # Initialize the Model and Optimizer
 model = SimpleGPT()
-# *** FIX: Use get_parameters(model) to retrieve the trainable tensors ***
+# *** FIX 3: Use get_parameters(model) to retrieve the trainable tensors ***
 optimizer = optim.Adam(get_parameters(model), lr=LEARNING_RATE) 
 
 print(f"\n--- Starting TinyGrad Q&A Fine-Tuning (Device: {DEVICE}) ---")
@@ -227,6 +230,7 @@ with Tensor.train():
         optimizer.step()
         
         if iter_num % (MAX_ITERS // 10) == 0 or iter_num == MAX_ITERS - 1:
+            # We explicitly realize the loss value for printing
             print(f"Step {iter_num}/{MAX_ITERS}: Train Loss = {loss.numpy().item():.4f}")
 
 print("--- TinyGrad Fine-Tuning Complete ---")
