@@ -5,12 +5,11 @@ from bs4 import BeautifulSoup
 
 # --- CORRECTED TINYGRAD IMPORTS ---
 from tinygrad import Tensor, nn
-# Optimizers (like Adam) are in the tinygrad.nn.optim submodule
 from tinygrad.nn import optim 
-from tinygrad.helpers import getenv 
+# *** FIX: Added get_parameters to retrieve weights for the optimizer ***
+from tinygrad.helpers import getenv, get_parameters 
 
 # Set device: Uses the 'GPU' environment variable if set, otherwise defaults to 'cpu'.
-# This avoids the "AttributeError: 'int' object has no attribute 'split'"
 DEVICE = getenv("GPU", 'cpu') 
 print(f"Using device: {DEVICE}")
 
@@ -119,9 +118,7 @@ class Head:
         self.query = nn.Linear(n_embd, head_size)
         self.value = nn.Linear(n_embd, head_size)
         
-        # Causal mask creation 
         tril = np.triu(np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.float32) * -float('inf'), k=1)
-        # Tensor is initialized using the correct device string
         self.tril = Tensor(tril, requires_grad=False, device=DEVICE) 
 
     def __call__(self, x):
@@ -129,10 +126,7 @@ class Head:
         k = self.key(x) 
         q = self.query(x) 
         
-        # Compute attention scores: wei = Q @ K^T / sqrt(d_k)
         wei = q.scaled_dot_product_attention(k, transpose=True)
-        
-        # Causal Masking
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
         
         wei = wei.softmax(axis=-1)
@@ -148,7 +142,6 @@ class MultiHeadAttention:
         self.proj = nn.Linear(N_EMBD, N_EMBD) 
 
     def __call__(self, x):
-        # Concatenate outputs from all heads
         out = Tensor.cat(*[h(x) for h in self.heads], axis=-1)
         out = self.proj(out)
         return out
@@ -177,7 +170,6 @@ class Block:
         self.ln2 = nn.LayerNorm(n_embd)
 
     def __call__(self, x):
-        # Pre-Norm + Residual Connection
         x = x + self.sa(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
         return x
@@ -185,44 +177,32 @@ class Block:
 class SimpleGPT:
     """The main Generative Pre-trained Transformer model."""
     def __init__(self):
-        # Embeddings
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMBD)
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
-        
-        # Stack of Transformer Blocks
         self.blocks = [Block(N_EMBD, N_HEAD) for _ in range(N_LAYER)]
-        
-        # Final Norm and Head
         self.ln_f = nn.LayerNorm(N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, VOCAB_SIZE)
 
     def __call__(self, idx, targets=None):
         B, T = idx.shape
         
-        # Positional Embeddings
         pos = Tensor.arange(T, requires_grad=False, device=DEVICE) 
         
-        # Embeddings: Tokens (B, T, C) + Positions (T, C)
         tok_emb = self.token_embedding_table(idx) 
         pos_emb = self.position_embedding_table(pos)
         x = tok_emb + pos_emb 
         
-        # Transformer Blocks
         for block in self.blocks:
             x = block(x)
         
-        # Final Norm and Linear Head
         x = self.ln_f(x)
-        logits = self.lm_head(x) # (B, T, VOCAB_SIZE)
+        logits = self.lm_head(x) 
 
         if targets is None:
             return logits, None
         else:
-            # Reshape logits and targets for cross_entropy
             logits_flat = logits.reshape(-1, logits.shape[-1])
             targets_flat = targets.reshape(-1)
-            
-            # Cross Entropy Loss
             loss = logits_flat.sparse_categorical_crossentropy(targets_flat)
             return logits, loss
 
@@ -230,20 +210,18 @@ class SimpleGPT:
 
 # Initialize the Model and Optimizer
 model = SimpleGPT()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE) 
+# *** FIX: Use get_parameters(model) to retrieve the trainable tensors ***
+optimizer = optim.Adam(get_parameters(model), lr=LEARNING_RATE) 
 
 print(f"\n--- Starting TinyGrad Q&A Fine-Tuning (Device: {DEVICE}) ---")
 
 # TinyGrad requires using Tensor.train() context for training mode
 with Tensor.train():
     for iter_num in range(MAX_ITERS):
-        # Sample a batch of data
         xb, yb = get_batch(qa_dataset, BATCH_SIZE, BLOCK_SIZE)
 
-        # Forward pass
         logits, loss = model(xb, yb)
         
-        # Backward pass and optimization (Autograd)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -288,8 +266,7 @@ def generate(model, prompt_str, max_new_tokens):
     idx = Tensor(np.array(idx, dtype=np.int32), device=DEVICE).unsqueeze(0) 
 
     for _ in range(max_new_tokens):
-        idx_cond = idx
-        logits, _ = model(idx_cond)
+        logits, _ = model(idx)
         
         logits = logits[:, -1, :] 
         probs = logits.softmax(axis=-1)
@@ -297,7 +274,6 @@ def generate(model, prompt_str, max_new_tokens):
         probs_np = probs.numpy().flatten()
         idx_next_np = np.random.choice(VOCAB_SIZE, p=probs_np)
         
-        # Update Sequence: Shift and append
         idx_np = idx.numpy()
         new_idx_np = np.roll(idx_np[0], -1)
         new_idx_np[-1] = idx_next_np
@@ -339,7 +315,6 @@ print("\n" + "="*50)
 print("✨ TinyGrad GPT RAG Answer Generation")
 print("="*50)
 
-# Example question: The model will use the web search context to try and answer
 test_prompt = "Who invented the telephone and when was it first demonstrated"
 
 answer, context = rag_with_web_search(model, test_prompt)
