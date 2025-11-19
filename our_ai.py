@@ -3,31 +3,33 @@ import requests
 import json
 from bs4 import BeautifulSoup
 
-# Import TinyGrad components
-from tinygrad import Tensor, nn, optim
-from tinygrad.helpers import getenv
+# --- CORRECTED TINYGRAD IMPORTS ---
+from tinygrad import Tensor, nn
+# Optimizers (like Adam) are in the tinygrad.nn.optim submodule
+from tinygrad.nn import optim 
+from tinygrad.helpers import getenv 
 
-# Set device to CPU by default for minimal setup
-DEVICE = getenv("GPU") # Will use GPU if available and set, otherwise defaults to CPU
+# Set device to CPU by default, or GPU if available and set
+DEVICE = getenv("GPU") 
+print(f"Using device: {DEVICE}")
 
 # --- CONFIGURATION (Hyperparameters) ---
 BLOCK_SIZE = 128     # Max context length
 N_EMBD = 128         # Embedding dimension (d_model)
 N_HEAD = 4           # Number of attention heads
 N_LAYER = 4          # Number of Transformer blocks
-DROPOUT = 0.1        
 HEAD_SIZE = N_EMBD // N_HEAD
 LEARNING_RATE = 1e-4
-MAX_ITERS = 100      # More iterations needed for TinyGrad's learning
+MAX_ITERS = 100      
 BATCH_SIZE = 32
-VOCAB_SIZE = 0       # Will be set after data loading
+VOCAB_SIZE = 0       
 
 # Data URLs
 SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
 GOOGLE_SEARCH_URL = "https://www.google.com/search?q="
 MAX_TRAINING_ENTRIES = 5000
 
-# --- 1. DATA LOADING AND PREPARATION UTILITIES (Using standard Python/NumPy) ---
+# --- 1. DATA LOADING AND PREPARATION UTILITIES ---
 char_to_int = {}
 int_to_char = {}
 
@@ -98,6 +100,7 @@ def get_batch(data_tuples, batch_size, block_size):
         X_batch.append(full_tokens[:-1])
         Y_batch.append(full_tokens[1:])
         
+    # Tensors are created using numpy arrays
     X = Tensor(np.stack(X_batch), device=DEVICE)
     Y = Tensor(np.stack(Y_batch), device=DEVICE)
     return X, Y
@@ -115,24 +118,24 @@ class Head:
         self.query = nn.Linear(n_embd, head_size)
         self.value = nn.Linear(n_embd, head_size)
         
-        # Causal mask creation (using numpy, then converting to Tensor)
-        tril = np.tril(np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.float32), k=0)
+        # Causal mask creation 
+        tril = np.triu(np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.float32) * -float('inf'), k=1)
         self.tril = Tensor(tril, requires_grad=False, device=DEVICE)
 
     def __call__(self, x):
         B, T, C = x.shape
-        k = self.key(x) # (B, T, head_size)
-        q = self.query(x) # (B, T, head_size)
+        k = self.key(x) 
+        q = self.query(x) 
         
         # Compute attention scores: wei = Q @ K^T / sqrt(d_k)
         wei = q.scaled_dot_product_attention(k, transpose=True)
         
-        # Causal Masking: masked_fill is used to prevent looking ahead
+        # Causal Masking: prevents looking ahead
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
         
         wei = wei.softmax(axis=-1)
         
-        v = self.value(x) # (B, T, head_size)
+        v = self.value(x)
         out = wei @ v
         return out
 
@@ -141,8 +144,6 @@ class MultiHeadAttention:
     def __init__(self, n_embd, n_head):
         self.heads = [Head(n_embd, HEAD_SIZE) for _ in range(n_head)]
         self.proj = nn.Linear(N_EMBD, N_EMBD) 
-        # Dropout is often used in TinyGrad by just calling .dropout() 
-        # on the Tensor if needed, but we keep it simple here.
 
     def __call__(self, x):
         # Concatenate outputs from all heads
@@ -182,7 +183,7 @@ class Block:
 class SimpleGPT:
     """The main Generative Pre-trained Transformer model."""
     def __init__(self):
-        # Embeddings: nn.Embedding is available in TinyGrad
+        # Embeddings
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMBD)
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
         
@@ -215,7 +216,7 @@ class SimpleGPT:
         if targets is None:
             return logits, None
         else:
-            # Reshape logits to (B*T, VOCAB_SIZE) for cross_entropy, targets to (B*T)
+            # Reshape logits and targets for cross_entropy
             logits_flat = logits.reshape(-1, logits.shape[-1])
             targets_flat = targets.reshape(-1)
             
@@ -227,25 +228,27 @@ class SimpleGPT:
 
 # Initialize the Model and Optimizer
 model = SimpleGPT()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE) # Optimizer is now imported correctly
 
 print(f"\n--- Starting TinyGrad Q&A Fine-Tuning (Device: {DEVICE}) ---")
 
-for iter_num in range(MAX_ITERS):
-    # Sample a batch of data
-    xb, yb = get_batch(qa_dataset, BATCH_SIZE, BLOCK_SIZE)
+# TinyGrad requires using Tensor.train() context for training mode (enables dropout, etc.)
+with Tensor.train():
+    for iter_num in range(MAX_ITERS):
+        # Sample a batch of data
+        xb, yb = get_batch(qa_dataset, BATCH_SIZE, BLOCK_SIZE)
 
-    # Forward pass
-    logits, loss = model(xb, yb)
-    
-    # Backward pass and optimization (TinyGrad Autograd in action!)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    
-    # Realize the loss to ensure computation is done and value is fetched
-    if iter_num % (MAX_ITERS // 10) == 0 or iter_num == MAX_ITERS - 1:
-        print(f"Step {iter_num}/{MAX_ITERS}: Train Loss = {loss.numpy().item():.4f}")
+        # Forward pass
+        logits, loss = model(xb, yb)
+        
+        # Backward pass and optimization (TinyGrad Autograd in action!)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        # Realize the loss to ensure computation is done and value is fetched
+        if iter_num % (MAX_ITERS // 10) == 0 or iter_num == MAX_ITERS - 1:
+            print(f"Step {iter_num}/{MAX_ITERS}: Train Loss = {loss.numpy().item():.4f}")
 
 print("--- TinyGrad Fine-Tuning Complete ---")
 
@@ -261,6 +264,7 @@ def simple_web_search(query):
         response.raise_for_status() 
 
         soup = BeautifulSoup(response.text, 'html.parser')
+        # This class name is a heuristic for Google featured snippets
         snippet_element = soup.find('div', class_='BNeawe s3v9rd AP7Wnd')
         
         if snippet_element:
@@ -274,7 +278,7 @@ def simple_web_search(query):
         print(f"[ERROR] Web search failed: {e}")
         return "No external context could be retrieved from the web."
 
-# No gradients needed for inference
+# Set no_grad for inference to disable gradient computation and save memory/time
 @Tensor.no_grad
 def generate(model, prompt_str, max_new_tokens):
     """Generates text from a prompt (Q|A...)."""
@@ -303,16 +307,13 @@ def generate(model, prompt_str, max_new_tokens):
         # Apply softmax to get probabilities
         probs = logits.softmax(axis=-1)
         
-        # Sample from the distribution (multinomial sampling)
-        # We sample using numpy because TinyGrad doesn't have a direct multinomial sampler
+        # Sample from the distribution 
         probs_np = probs.numpy().flatten()
+        
+        # Use np.random.choice for token sampling
         idx_next_np = np.random.choice(VOCAB_SIZE, p=probs_np)
         
-        # Convert sampled index back to Tensor
-        idx_next = Tensor(np.array([idx_next_np], dtype=np.int32), device=DEVICE).unsqueeze(0)
-        
-        # Append sampled index to the running sequence and crop to BLOCK_SIZE
-        # We roll the array to simulate a shifting window for sequence generation
+        # Update Sequence: Shift the sequence left and append the new token
         idx_np = idx.numpy()
         new_idx_np = np.roll(idx_np[0], -1)
         new_idx_np[-1] = idx_next_np
@@ -356,10 +357,9 @@ print("\n" + "="*50)
 print("✨ TinyGrad GPT RAG Answer Generation")
 print("="*50)
 
-# The model has now been trained for 100 steps
+# Example question: The model will use the web search context to try and answer
 test_prompt = "Who invented the telephone and when was it first demonstrated"
 
-# The model will use the web search context to try and answer
 answer, context = rag_with_web_search(model, test_prompt)
 
 print("\n\n" + "="*20 + " RESULTS " + "="*20)
